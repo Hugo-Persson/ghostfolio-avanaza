@@ -52,7 +52,7 @@ pub struct Cli {
 #[derive(Subcommand, PartialEq)]
 enum Commands {
 
-    /// Commands for interacting with the godaddy api
+    /// Import market history for a symbol
     Import {
         name: String,
 
@@ -65,6 +65,8 @@ enum Commands {
         to: Option<String>,
 
     }
+
+
 
 }
 
