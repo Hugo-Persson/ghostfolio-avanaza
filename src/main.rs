@@ -71,6 +71,7 @@ enum Commands {
     GetScraperConfiguration {
         name: String,
     },
+
 }
 
 fn get_date_one_year_ago() -> String {
@@ -170,9 +171,7 @@ async fn import_history(name: String, from: String, to: String) {
         };
     }
 
-    let mut ctx = ClipboardContext::new().unwrap();
-    ctx.set_contents(csv_data.join("\n")).unwrap();
-    println!("Copied to clipboard");
+    copy_to_clipboard(csv_data.join("\n"));
 }
 
 fn is_date_greater(first: &String, second: &String) -> bool {
@@ -230,11 +229,15 @@ async fn get_scraper_configuration(name: String) {
         "selector": selector,
 
     });
-    let mut ctx = ClipboardContext::new().unwrap();
     let res = to_string(&config).expect("Failed to serialize");
-    ctx.set_contents(res.clone()).unwrap_or_else( |e| {
+    copy_to_clipboard(res);
+    println!("Copied to clipboard");
+}
+fn copy_to_clipboard(s: String) {
+    let mut ctx = ClipboardContext::new().unwrap();
+    ctx.set_contents(s.clone()).unwrap_or_else( |e| {
         println!("Failed to copy to clipboard: {}", e);
-        println!("{}", res);
+        println!("{}", s);
     });
     println!("Copied to clipboard");
 }
