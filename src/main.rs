@@ -8,6 +8,7 @@ use serde_json::{json, to_string};
 use std::fmt;
 use std::mem::zeroed;
 use std::path::PathBuf;
+use inquire::{InquireError, Select};
 
 mod avanza;
 
@@ -186,16 +187,16 @@ fn timestamp_to_date(timestamp: i64) -> String {
 
 async fn find_symbol(name: String) -> Hit {
     let hits = avanza::search::search_avanza(&name).await.unwrap();
-    let res = hits.iter().map(format_hit).collect::<Vec<String>>();
-    let mut i = 1;
-    println!("Select symbol:");
-    for r in res {
-        println!("{}. {}", i, r);
-        i += 1;
+    let options = hits.iter().map(format_hit).collect::<Vec<String>>();
+    if options.len() == 0 {
+        panic!("No hits found");
     }
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input).unwrap();
-    let index = input.trim().parse::<usize>().unwrap();
+    if options.len() == 1 {
+        println!("Only one hit, choosing: {}", format_hit(&hits[0]));
+        return hits[0].clone();
+    }
+    let ans: String = Select::new("What's your favorite fruit?", options.clone()).prompt().expect("Failed to get input");
+    let index = options.iter().position(|x| *x == ans).unwrap();
     hits[index - 1].clone().clone()
 }
 
