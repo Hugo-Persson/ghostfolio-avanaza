@@ -4,11 +4,15 @@ use chrono::NaiveDate;
 use clap::{Parser, Subcommand};
 use cli_clipboard::{ClipboardContext, ClipboardProvider};
 use serde::Serialize;
-use serde_json::{json, to_string};
+use serde_json::{json, to_string, Value};
 use std::fmt;
 use std::mem::zeroed;
+use std::panic::panic_any;
 use std::path::PathBuf;
 use inquire::{InquireError, Select};
+use log::debug;
+use crate::avanza::fund_info::get_avanza_fund_info;
+use crate::avanza::stock_info::avanza_get_stock_info;
 
 mod avanza;
 
@@ -28,7 +32,6 @@ impl fmt::Display for SymbolType {
 }
 impl SymbolType {
     pub fn from_str(s: &str) -> Self {
-        println!("s: {}", s);
         match s {
             "STOCK" => Self::STOCK,
             "FUND" => Self::MUTUALFUND,
@@ -71,6 +74,10 @@ enum Commands {
     GetScraperConfiguration {
         name: String,
     },
+    GetSectors {
+        name: String,
+    },
+
 
 }
 
@@ -102,6 +109,7 @@ async fn main() {
         }
         Some(Commands::ParseTransactions { file }) => todo!("Finish this"),
         Some(Commands::GetScraperConfiguration { name }) => get_scraper_configuration(name).await,
+        Some(Commands::GetSectors { name }) => get_sectors(find_symbol(name).await).await,
         None => {
             println!("No command specified");
         }
@@ -196,7 +204,7 @@ async fn find_symbol(name: String) -> Hit {
     }
     let ans: String = Select::new("What's your favorite fruit?", options.clone()).prompt().expect("Failed to get input");
     let index = options.iter().position(|x| *x == ans).unwrap();
-    hits[index - 1].clone().clone()
+    hits[index].clone().clone()
 }
 
 fn format_hit(hit: &Hit) -> String {
@@ -240,4 +248,23 @@ fn copy_to_clipboard(s: String) {
         println!("{}", s);
     });
     println!("Copied to clipboard");
+}
+
+async fn get_sectors(hit: Hit){
+   let sectors = match SymbolType::from_str(&hit.link.type_field){
+       SymbolType::STOCK => {
+           panic!("Stock not supported");
+       },
+       SymbolType::MUTUALFUND => {
+          get_avanza_fund_info(&hit.link.orderbook_id).await.unwrap().sector_chart_data.iter().map(|x| {
+              let weight = x.y/100.0;
+              json!({
+                  "name": x.name,
+                  "weight": weight,
+                  })
+            }).collect::<Vec<Value>>()
+          },
+       };
+    copy_to_clipboard(to_string(&sectors).unwrap());
+
 }
