@@ -1,20 +1,21 @@
+use crate::avanza::fund_info::get_avanza_fund_info;
 use crate::avanza::history::TimePeriod;
 use crate::avanza::search::Hit;
+use crate::avanza::stock_info::avanza_get_stock_info;
+use avanza::transaction_history_parser;
 use chrono::NaiveDate;
 use clap::{Parser, Subcommand};
 use cli_clipboard::{ClipboardContext, ClipboardProvider};
+use inquire::{InquireError, Select};
+use log::debug;
 use serde::Serialize;
 use serde_json::{json, to_string, Value};
 use std::fmt;
-use std::mem::zeroed;
-use std::panic::panic_any;
 use std::path::PathBuf;
-use inquire::{InquireError, Select};
-use log::debug;
-use crate::avanza::fund_info::get_avanza_fund_info;
-use crate::avanza::stock_info::avanza_get_stock_info;
 
 mod avanza;
+mod config;
+mod ghostfolio;
 
 #[derive(Serialize, PartialEq, Debug)]
 pub enum SymbolType {
@@ -65,20 +66,25 @@ enum Commands {
         #[arg(short, long)]
         to: Option<String>,
     },
-
+    /// Parse transactions from a csv file from Avanza to later import to Avanza
     ParseTransactions {
         #[arg(short, long)]
         file: PathBuf,
     },
-
+    /// Get scraper configuration for a symbol, used by Ghostfolio to scrape data
     GetScraperConfiguration {
         name: String,
     },
+    /// Get sectors in format [{name: "Technology", weight: 0.5}, ...]
     GetSectors {
         name: String,
     },
+    /// Get countries in format [{name: "Sweden", weight: 0.5}, ...]
+    GetCountries {
+        name: String,
+    },
 
-
+    Test,
 }
 
 fn get_date_one_year_ago() -> String {
@@ -107,9 +113,21 @@ async fn main() {
             )
             .await;
         }
-        Some(Commands::ParseTransactions { file }) => todo!("Finish this"),
-        Some(Commands::GetScraperConfiguration { name }) => get_scraper_configuration(name).await,
-        Some(Commands::GetSectors { name }) => get_sectors(find_symbol(name).await).await,
+        Some(Commands::ParseTransactions { file }) => {
+            transaction_history_parser::parse_from_file(file)
+        }
+        Some(Commands::GetScraperConfiguration { name }) => {
+            copy_to_clipboard(get_scraper_configuration(name).await)
+        }
+        Some(Commands::GetSectors { name }) => {
+            copy_to_clipboard(get_sectors(find_symbol(name).await).await)
+        }
+        Some(Commands::GetCountries { .. }) => {}
+        Some(Commands::Test) => {
+            let ghost = ghostfolio::GhostfolioApi::new();
+            let assets = ghost.get_assets().await;
+            println!("{:#?}", assets);
+        }
         None => {
             println!("No command specified");
         }
@@ -202,9 +220,15 @@ async fn find_symbol(name: String) -> Hit {
         println!("Only one hit, choosing: {}", format_hit(&hits[0]));
         return hits[0].clone();
     }
-    let ans: String = Select::new("What's your favorite fruit?", options.clone()).prompt().expect("Failed to get input");
+    let ans: String = Select::new("Select your symbol", options.clone())
+        .prompt()
+        .expect("Failed to get input");
     let index = options.iter().position(|x| *x == ans).unwrap();
     hits[index].clone().clone()
+}
+
+async fn create_symbol(name: String) {
+    let hit = find_symbol(name).await;
 }
 
 fn format_hit(hit: &Hit) -> String {
@@ -213,14 +237,13 @@ fn format_hit(hit: &Hit) -> String {
         hit.link.type_field, hit.link.link_display, hit.last_price, hit.currency
     )
 }
-async fn get_scraper_configuration(name: String) {
-    println!("Here");
+async fn get_scraper_configuration(name: String) -> String {
     let symbol = find_symbol(name).await;
     let url = if symbol.link.type_field == SymbolType::STOCK.to_string() {
-
         format!(
             "https://www.avanza.se/_api/market-guide/stock/{}",
-            symbol.link.orderbook_id)
+            symbol.link.orderbook_id
+        )
     } else {
         format!(
             "https://www.avanza.se/_api/fund-guide/guide/{}",
@@ -237,34 +260,53 @@ async fn get_scraper_configuration(name: String) {
         "selector": selector,
 
     });
-    let res = to_string(&config).expect("Failed to serialize");
-    copy_to_clipboard(res);
-    println!("Copied to clipboard");
+    to_string(&config).expect("Failed to serialize")
 }
 fn copy_to_clipboard(s: String) {
     let mut ctx = ClipboardContext::new().unwrap();
-    ctx.set_contents(s.clone()).unwrap_or_else( |e| {
+    ctx.set_contents(s.clone()).unwrap_or_else(|e| {
         println!("Failed to copy to clipboard: {}", e);
         println!("{}", s);
     });
     println!("Copied to clipboard");
 }
 
-async fn get_sectors(hit: Hit){
-   let sectors = match SymbolType::from_str(&hit.link.type_field){
-       SymbolType::STOCK => {
-           panic!("Stock not supported");
-       },
-       SymbolType::MUTUALFUND => {
-          get_avanza_fund_info(&hit.link.orderbook_id).await.unwrap().sector_chart_data.iter().map(|x| {
-              let weight = x.y/100.0;
-              json!({
-                  "name": x.name,
-                  "weight": weight,
-                  })
-            }).collect::<Vec<Value>>()
-          },
-       };
-    copy_to_clipboard(to_string(&sectors).unwrap());
+async fn get_sectors(hit: Hit) -> String {
+    let sectors = match SymbolType::from_str(&hit.link.type_field) {
+        SymbolType::STOCK => {
+            panic!("Stock not supported");
+        }
+        SymbolType::MUTUALFUND => get_avanza_fund_info(&hit.link.orderbook_id)
+            .await
+            .unwrap()
+            .sector_chart_data
+            .iter()
+            .map(|x| avanza_to_ghostfolio_weights(&x.name, x.y))
+            .collect::<Vec<Value>>(),
+    };
+    to_string(&sectors).unwrap()
+}
 
+async fn get_countries(hit: Hit) {
+    let countries = match SymbolType::from_str(&hit.link.type_field) {
+        SymbolType::STOCK => {
+            panic!("Stock not supported");
+        }
+        SymbolType::MUTUALFUND => get_avanza_fund_info(&hit.link.orderbook_id)
+            .await
+            .unwrap()
+            .country_chart_data
+            .iter()
+            .map(|x| avanza_to_ghostfolio_weights(&x.name, x.y))
+            .collect::<Vec<Value>>(),
+    };
+    copy_to_clipboard(to_string(&countries).unwrap());
+}
+
+fn avanza_to_ghostfolio_weights(name: &String, y: f64) -> Value {
+    let weight = y / 100.0;
+    json!({
+        "name": name,
+        "weight": weight,
+    })
 }
