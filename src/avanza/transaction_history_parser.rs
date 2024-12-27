@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
+use maplit::hashmap;
 use serde::Serialize;
+
+use crate::ghostfolio::GhostfolioApi;
 
 // Datum;Konto;Typ av transaktion;Värdepapper/beskrivning;Antal;Kurs;Belopp;Courtage;Valuta;ISIN;Resultat
 #[derive(Debug, PartialEq, Serialize)]
@@ -20,8 +23,9 @@ impl GhostfolioType {
             "Köp" => Self::BUY,
             "Utdelning" => Self::DIVIDEND,
             "Sälj" => Self::SELL,
-            "Utländsk källskatt" => Self::FEE,
+            "Utländsk källskatt" | "Preliminärskatt" => Self::FEE,
             "Övrigt" => Self::OTHER,
+            "Ränta" => Self::INTEREST,
             _ => panic!("Unknown ghostfolio type {}", s),
         }
     }
@@ -48,12 +52,18 @@ struct Record {
     isin: String,
     result: f64,
 }
+
 impl Record {
-    pub fn from_csv_record(record: csv::StringRecord) -> Self {
-        println!("{:?}", record);
+    pub async fn from_csv_record(record: csv::StringRecord) -> Self {
+        let mut ghostfolio: GhostfolioApi = GhostfolioApi::new();
+        let avanza_account = record.get(1).unwrap();
+
         let mut record = Record {
             date: record.get(0).unwrap().to_string(),
-            account: record.get(1).unwrap().to_string(),
+            account: ghostfolio
+                .get_account_mapping(avanza_account.to_string())
+                .await
+                .to_string(),
             transaction_type: GhostfolioType::from_avanza(record.get(2).unwrap()),
             security: record.get(3).unwrap().to_string(),
             amount: transform_avanza_number_to_number(record.get(4).unwrap()),
@@ -65,7 +75,6 @@ impl Record {
             result: transform_avanza_number_to_number(record.get(10).unwrap()),
         };
         if record.transaction_type == GhostfolioType::OTHER {
-            println!("{:?}", record);
             if record.amount == 0.0 {
                 // Probably dividend, We have two entries one where amount positive and one where
                 // ngative
@@ -87,8 +96,8 @@ impl Record {
     }
 }
 
-pub fn parse_from_file(path: PathBuf) -> () {
-    let skip_types = vec!["Insättning", "Uttag"];
+pub async fn parse_from_file(path: PathBuf) -> () {
+    let skip_types = vec!["Insättning", "Uttag", "Värdepappersöverföring"];
     let mut rdr = csv::ReaderBuilder::new()
         .delimiter(b';')
         .from_path(path)
@@ -99,9 +108,9 @@ pub fn parse_from_file(path: PathBuf) -> () {
             if skip_types.contains(&record.get(2).unwrap()) {
                 continue;
             }
-            let parsed_record = Record::from_csv_record(record);
+            let parsed_record = Record::from_csv_record(record).await;
             parsed.push(parsed_record);
         }
     }
-    println!("{:?}", parsed);
+    println!("{:?}", parsed[1]);
 }

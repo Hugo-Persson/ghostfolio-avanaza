@@ -114,7 +114,7 @@ async fn main() {
             .await;
         }
         Some(Commands::ParseTransactions { file }) => {
-            transaction_history_parser::parse_from_file(file)
+            transaction_history_parser::parse_from_file(file).await
         }
         Some(Commands::GetScraperConfiguration { name }) => {
             copy_to_clipboard(get_scraper_configuration(name).await)
